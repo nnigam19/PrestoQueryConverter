@@ -21,7 +21,7 @@ Opinionated, scriptable converter that turns Presto SQL into Databricks SQL (DBS
 
 ## 🚀 Quick Start
 
-### Web App DEployment
+### 🚀 Web App Deployment
 
 1. Clone into Databricks Git Folder
 Clone this repository into a Databricks Git-enabled workspace folder.
@@ -34,7 +34,7 @@ Install dependencies
 Deploy the Streamlit app into your workspace
 Make the app available for immediate use
 
-### Local System Deployment
+### 🚀 Local Deployment
 
 1. Clone & install
 ```bash
