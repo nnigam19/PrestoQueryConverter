@@ -70,22 +70,61 @@ def normalize_identifiers(sql: str) -> str:
     sql = sql.replace('""', '"')
     sql = strip_ansi(sql)
     sql = _DOUBLE_QUAL_QUOTE.sub(lambda m: f"{m.group(1)}.{m.group(2).replace('/', '_')}", sql)
-    sql = _QUOTED_IDENT.sub(lambda m: m.group(1).replace("/", "_"), sql)
-    sql = _BACKTICK_IDENT.sub(lambda m: m.group(1).replace("/", "_"), sql)
-    return sql
+    
+    # Preserve double-quoted aliases (AS "something") - Databricks SQL supports them
+    # Temporarily replace AS aliases to protect them from quote removal
+    alias_placeholders = {}
+    placeholder_counter = [0]
+    
+    def protect_alias(match):
+        placeholder = f"__ALIAS_PLACEHOLDER_{placeholder_counter[0]}__"
+        alias_placeholders[placeholder] = match.group(0)  # Keep the full AS "alias" pattern
+        placeholder_counter[0] += 1
+        return placeholder
+    
+    # Protect AS "alias" patterns before normalizing other quoted identifiers
+    protected_sql = _AS_DOUBLE_QUOTED_ALIAS.sub(protect_alias, sql)
+    
+    # Now normalize other quoted identifiers (but not the protected aliases)
+    protected_sql = _QUOTED_IDENT.sub(lambda m: m.group(1).replace("/", "_"), protected_sql)
+    protected_sql = _BACKTICK_IDENT.sub(lambda m: m.group(1).replace("/", "_"), protected_sql)
+    
+    # Restore protected aliases (they still have their quotes)
+    for placeholder, original in sorted(alias_placeholders.items(), key=lambda x: len(x[0]), reverse=True):
+        protected_sql = protected_sql.replace(placeholder, original)
+    
+    return protected_sql
 
 # ----------------------------------------------------------------------
 # STRICT PRE-PARSING ALIAS NORMALIZATION (fixes crash)
 # ----------------------------------------------------------------------
 
 def force_aliases_pre_parse(sql: str) -> str:
-    def repl(m):
+    # Preserve double-quoted aliases - Databricks SQL supports them natively
+    # Only normalize single-quoted aliases and unquoted aliases with spaces
+    def repl_single(m):
         alias = m.group(1).strip()
         alias_clean = re.sub(r"\s+", "_", alias)
         alias_clean = re.sub(r"[^\w_]", "_", alias_clean)
         return f"AS {alias_clean}"
-    sql = _AS_DOUBLE_QUOTED_ALIAS.sub(repl, sql)
-    sql = _AS_SINGLE_QUOTED_ALIAS.sub(repl, sql)
+    
+    # Only process single-quoted aliases
+    sql = _AS_SINGLE_QUOTED_ALIAS.sub(repl_single, sql)
+    
+    # Handle unquoted aliases with spaces (AS PO Header ID -> AS PO_Header_ID)
+    # But preserve double-quoted aliases as-is
+    unquoted_alias_pattern = re.compile(r'\bAS\s+([A-Za-z_][A-Za-z0-9_\s]+?)(?=\s*,\s*[A-Za-z_]|\s+FROM|\s*$)', re.IGNORECASE)
+    def repl_unquoted(m):
+        alias = m.group(1).strip()
+        # Only normalize if it contains spaces or special chars
+        if re.search(r'[\s\-]', alias):
+            alias_clean = re.sub(r"\s+", "_", alias)
+            alias_clean = re.sub(r"[^\w_]", "_", alias_clean)
+            return f"AS {alias_clean}"
+        return m.group(0)  # Keep as-is if no spaces
+    
+    sql = unquoted_alias_pattern.sub(repl_unquoted, sql)
+    
     return sql
 
 # ----------------------------------------------------------------------

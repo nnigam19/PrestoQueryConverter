@@ -37,6 +37,24 @@ def extract_inner_from_execute(blob: str) -> str:
     return blob
 
 # ----------------------------------------------------------------------
+# PREPARE ... FROM extractor (unwraps embedded SQL)
+# ----------------------------------------------------------------------
+
+def extract_inner_from_prepare(blob: str) -> str:
+    """Extract the SQL query from PREPARE stmt FROM <query> statements."""
+    blob = strip_ansi(blob)
+    import re
+    # Match PREPARE ... FROM pattern (case insensitive)
+    m = re.search(r"\bPREPARE\s+\w+\s+FROM\s+", blob, flags=re.IGNORECASE)
+    if m:
+        # Extract everything after "FROM"
+        sql_part = blob[m.end():].strip()
+        # Remove trailing semicolon if present
+        sql_part = sql_part.rstrip(';').strip()
+        return sql_part
+    return blob
+
+# ----------------------------------------------------------------------
 # MAIN BLOB CONVERTER
 # ----------------------------------------------------------------------
 
@@ -44,7 +62,11 @@ def convert_blob(blob: str):
     try:
         blob = strip_ansi(blob)
 
-        inner = extract_inner_from_execute(blob)
+        # First check for PREPARE statements, then EXECUTE statements
+        inner = extract_inner_from_prepare(blob)
+        if inner == blob:  # No PREPARE found, check for EXECUTE
+            inner = extract_inner_from_execute(blob)
+        
         inner = unescape_wrapped_sql_content(inner)
         inner = normalize_identifiers(inner)
         inner = force_aliases_pre_parse(inner)
