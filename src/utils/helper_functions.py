@@ -128,32 +128,163 @@ def convert_trim_syntax(sql: str) -> str:
     TRIM(TRAILING 'x' FROM col) -> RTRIM(col, 'x')
     TRIM(BOTH 'x' FROM col) -> TRIM(col, 'x')
     TRIM('x' FROM col) -> TRIM(col, 'x')  # defaults to BOTH
+    
+    This function properly handles nested parentheses in the column expression.
     """
-    # Pattern for TRIM with LEADING/TRAILING/BOTH
-    pattern = re.compile(
-        r"\bTRIM\s*\(\s*(LEADING|TRAILING|BOTH)?\s*(['\"]?)([^'\"]*?)\2\s+FROM\s+([^\)]+?)\s*\)",
-        flags=re.IGNORECASE
-    )
     
-    def replace_trim(match):
-        trim_type = match.group(1)
-        quote_char = match.group(2) if match.group(2) else "'"
-        trim_char = match.group(3)
-        column = match.group(4).strip()
+    def find_matching_paren(text, start_pos):
+        depth = 1
+        i = start_pos
+        in_single_quote = False
+        in_double_quote = False
         
-        if trim_type:
-            trim_type_upper = trim_type.upper()
-            if trim_type_upper == 'LEADING':
-                return f"LTRIM({column}, {quote_char}{trim_char}{quote_char})"
-            elif trim_type_upper == 'TRAILING':
-                return f"RTRIM({column}, {quote_char}{trim_char}{quote_char})"
-            else:  # BOTH
-                return f"TRIM({column}, {quote_char}{trim_char}{quote_char})"
-        else:
-            # No trim type specified, defaults to BOTH
-            return f"TRIM({column}, {quote_char}{trim_char}{quote_char})"
+        while i < len(text) and depth > 0:
+            ch = text[i]
+            
+            # Handle quotes to avoid counting parens inside strings
+            if ch == "'" and not in_double_quote:
+                if i > 0 and text[i-1] == '\\':
+                    pass  # escaped quote
+                else:
+                    in_single_quote = not in_single_quote
+            elif ch == '"' and not in_single_quote:
+                if i > 0 and text[i-1] == '\\':
+                    pass  # escaped quote
+                else:
+                    in_double_quote = not in_double_quote
+            elif not in_single_quote and not in_double_quote:
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+            
+            i += 1
+        
+        return i if depth == 0 else -1
     
-    return pattern.sub(replace_trim, sql)
+    # Find all TRIM patterns manually to handle nested parentheses
+    result = []
+    i = 0
+    
+    while i < len(sql):
+        # Look for TRIM(
+        trim_match = re.match(r'\bTRIM\s*\(', sql[i:], re.IGNORECASE)
+        
+        if trim_match:
+            trim_start = i
+            paren_start = i + trim_match.end() - 1  # Position of opening '('
+            
+            # Find the matching closing parenthesis
+            paren_end = find_matching_paren(sql, paren_start + 1)
+            
+            if paren_end == -1:
+                # Couldn't find matching paren, just copy as-is
+                result.append(sql[i])
+                i += 1
+                continue
+            
+            # Extract the content inside TRIM(...)
+            content = sql[paren_start + 1:paren_end - 1].strip()
+            
+            # Try to parse the TRIM content manually to handle quoted strings properly
+            # Pattern: (LEADING|TRAILING|BOTH)? 'char' FROM expression
+            
+            # First, check for optional LEADING/TRAILING/BOTH keyword
+            trim_type = None
+            remaining = content.strip()
+            
+            trim_keyword_match = re.match(r'^\s*(LEADING|TRAILING|BOTH)\s+', remaining, re.IGNORECASE)
+            if trim_keyword_match:
+                trim_type = trim_keyword_match.group(1)
+                remaining = remaining[trim_keyword_match.end():]
+            
+            # Now extract the quoted trim character
+            # Handle both single and double quotes, including escaped quotes
+            quote_char = None
+            trim_char = None
+            
+            if remaining.startswith("'"):
+                quote_char = "'"
+                # Find the closing quote, handling escaped quotes
+                i = 1
+                trim_chars = []
+                while i < len(remaining):
+                    if remaining[i] == "'":
+                        if i + 1 < len(remaining) and remaining[i + 1] == "'":
+                            # Escaped single quote
+                            trim_chars.append("'")
+                            i += 2
+                        else:
+                            # End of string
+                            trim_char = ''.join(trim_chars)
+                            remaining = remaining[i + 1:].strip()
+                            break
+                    else:
+                        trim_chars.append(remaining[i])
+                        i += 1
+            elif remaining.startswith('"'):
+                quote_char = '"'
+                # Find the closing quote, handling escaped quotes
+                i = 1
+                trim_chars = []
+                while i < len(remaining):
+                    if remaining[i] == '"':
+                        if i + 1 < len(remaining) and remaining[i + 1] == '"':
+                            # Escaped double quote
+                            trim_chars.append('"')
+                            i += 2
+                        else:
+                            # End of string
+                            trim_char = ''.join(trim_chars)
+                            remaining = remaining[i + 1:].strip()
+                            break
+                    else:
+                        trim_chars.append(remaining[i])
+                        i += 1
+            
+            # Check for FROM keyword and extract column expression
+            from_match = re.match(r'^\s*FROM\s+(.+)$', remaining, re.IGNORECASE | re.DOTALL)
+            
+            if quote_char and trim_char is not None and from_match:
+                column_expr = from_match.group(1).strip()
+                
+                # Determine which function to use
+                if trim_type:
+                    trim_type_upper = trim_type.upper()
+                    if trim_type_upper == 'LEADING':
+                        func_name = 'LTRIM'
+                    elif trim_type_upper == 'TRAILING':
+                        func_name = 'RTRIM'
+                    else:  # BOTH
+                        func_name = 'TRIM'
+                else:
+                    # No trim type specified, defaults to BOTH
+                    func_name = 'TRIM'
+                
+                # Build the replacement with proper escaping
+                # If trim_char contains the same quote as quote_char, we need to escape it
+                if quote_char == "'" and "'" in trim_char:
+                    # Escape single quotes by doubling them
+                    escaped_trim_char = trim_char.replace("'", "''")
+                    replacement = f"{func_name}({column_expr}, '{escaped_trim_char}')"
+                elif quote_char == '"' and '"' in trim_char:
+                    # Escape double quotes by doubling them
+                    escaped_trim_char = trim_char.replace('"', '""')
+                    replacement = f'{func_name}({column_expr}, "{escaped_trim_char}")'
+                else:
+                    replacement = f"{func_name}({column_expr}, {quote_char}{trim_char}{quote_char})"
+                
+                result.append(replacement)
+                i = paren_end
+            else:
+                # Not a FROM-style TRIM, keep as-is
+                result.append(sql[trim_start:paren_end])
+                i = paren_end
+        else:
+            result.append(sql[i])
+            i += 1
+    
+    return ''.join(result)
 
 # ----------------------------------------------------------------------
 # Small trailing repairs
