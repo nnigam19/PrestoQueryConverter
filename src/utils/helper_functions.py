@@ -69,39 +69,33 @@ def normalize_identifiers(sql: str) -> str:
         return sql
     sql = sql.replace('""', '"')
     sql = strip_ansi(sql)
-    sql = _DOUBLE_QUAL_QUOTE.sub(lambda m: f"{m.group(1)}.{m.group(2).replace('/', '_')}", sql)
-    
-    alias_placeholders = {}
-    placeholder_counter = [0]
-    
-    def protect_alias(match):
-        placeholder = f"__ALIAS_PLACEHOLDER_{placeholder_counter[0]}__"
-        alias_placeholders[placeholder] = match.group(0)  # Keep the full AS "alias" pattern
-        placeholder_counter[0] += 1
-        return placeholder
-    
-    protected_sql = _AS_DOUBLE_QUOTED_ALIAS.sub(protect_alias, sql)
-    
-    protected_sql = _QUOTED_IDENT.sub(lambda m: m.group(1).replace("/", "_"), protected_sql)
-    protected_sql = _BACKTICK_IDENT.sub(lambda m: m.group(1).replace("/", "_"), protected_sql)
-    
-    for placeholder, original in sorted(alias_placeholders.items(), key=lambda x: len(x[0]), reverse=True):
-        protected_sql = protected_sql.replace(placeholder, original)
-    
-    return protected_sql
+    return sql
 
 # ----------------------------------------------------------------------
 # STRICT PRE-PARSING ALIAS NORMALIZATION (fixes crash)
 # ----------------------------------------------------------------------
 
 def force_aliases_pre_parse(sql: str) -> str:
-    def repl_single(m):
-        alias = m.group(1).strip()
-        alias_clean = re.sub(r"\s+", "_", alias)
+    def _clean(alias: str) -> str:
+        alias_clean = re.sub(r"\s+", "_", alias.strip())
         alias_clean = re.sub(r"[^\w_]", "_", alias_clean)
-        return f"AS {alias_clean}"
-    
+        return alias_clean
+
+    def repl_single(m):
+        alias = m.group(1)
+        return f"AS {_clean(alias)}"
+
+    def repl_double(m):
+        # For double-quoted aliases (AS "Some Alias"), keep the alias text
+        # exactly the same but switch to backticks so it is a valid identifier
+        # in Databricks SQL: AS `Some Alias`.
+        alias = m.group(1)
+        return f"AS `{alias}`"
+
+    # Normalize single-quoted aliases to safe identifiers, and convert
+    # double-quoted aliases to backtick-quoted identifiers with the same text.
     sql = _AS_SINGLE_QUOTED_ALIAS.sub(repl_single, sql)
+    sql = _AS_DOUBLE_QUOTED_ALIAS.sub(repl_double, sql)
     
     unquoted_alias_pattern = re.compile(r'\bAS\s+([A-Za-z_][A-Za-z0-9_\s]+?)(?=\s*,\s*[A-Za-z_]|\s+FROM|\s*$)', re.IGNORECASE)
     def repl_unquoted(m):
@@ -122,6 +116,44 @@ def force_aliases_pre_parse(sql: str) -> str:
 
 def ensure_regexp_replacement(sql: str):
     return _REGEXP_REPLACE_2ARGS.sub(lambda m: f"{m.group(1)}({m.group(2)}, {m.group(3)}, '')", sql)
+
+# ----------------------------------------------------------------------
+# Convert TRIM(LEADING/TRAILING/BOTH ... FROM ...) to LTRIM/RTRIM/TRIM
+# ----------------------------------------------------------------------
+
+def convert_trim_syntax(sql: str) -> str:
+    """
+    Convert Presto TRIM syntax to Databricks-compatible syntax.
+    TRIM(LEADING 'x' FROM col) -> LTRIM(col, 'x')
+    TRIM(TRAILING 'x' FROM col) -> RTRIM(col, 'x')
+    TRIM(BOTH 'x' FROM col) -> TRIM(col, 'x')
+    TRIM('x' FROM col) -> TRIM(col, 'x')  # defaults to BOTH
+    """
+    # Pattern for TRIM with LEADING/TRAILING/BOTH
+    pattern = re.compile(
+        r"\bTRIM\s*\(\s*(LEADING|TRAILING|BOTH)?\s*(['\"]?)([^'\"]*?)\2\s+FROM\s+([^\)]+?)\s*\)",
+        flags=re.IGNORECASE
+    )
+    
+    def replace_trim(match):
+        trim_type = match.group(1)
+        quote_char = match.group(2) if match.group(2) else "'"
+        trim_char = match.group(3)
+        column = match.group(4).strip()
+        
+        if trim_type:
+            trim_type_upper = trim_type.upper()
+            if trim_type_upper == 'LEADING':
+                return f"LTRIM({column}, {quote_char}{trim_char}{quote_char})"
+            elif trim_type_upper == 'TRAILING':
+                return f"RTRIM({column}, {quote_char}{trim_char}{quote_char})"
+            else:  # BOTH
+                return f"TRIM({column}, {quote_char}{trim_char}{quote_char})"
+        else:
+            # No trim type specified, defaults to BOTH
+            return f"TRIM({column}, {quote_char}{trim_char}{quote_char})"
+    
+    return pattern.sub(replace_trim, sql)
 
 # ----------------------------------------------------------------------
 # Small trailing repairs

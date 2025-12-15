@@ -6,6 +6,7 @@ from src.utils.helper_functions import (
     normalize_identifiers,
     force_aliases_pre_parse,
     ensure_regexp_replacement,
+    convert_trim_syntax,
     repair_common_trailing_mistakes,
     ast_fix_regexp_nodes,
     safe_split_sql,
@@ -71,6 +72,7 @@ def convert_blob(blob: str):
         inner = normalize_identifiers(inner)
         inner = force_aliases_pre_parse(inner)
         inner = ensure_regexp_replacement(inner)
+        inner = convert_trim_syntax(inner)
         inner = repair_common_trailing_mistakes(inner)
         inner = balance_single_quotes(inner)
 
