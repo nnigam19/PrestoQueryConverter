@@ -75,6 +75,8 @@ def convert_blob(blob: str):
         inner = convert_trim_syntax(inner)
         inner = repair_common_trailing_mistakes(inner)
         inner = balance_single_quotes(inner)
+        # Strip any ANSI codes that may have been introduced
+        inner = strip_ansi(inner)
 
         parsed = sqlglot.parse_one(inner, read="presto")
         parsed = ast_fix_regexp_nodes(parsed)
@@ -87,7 +89,9 @@ def convert_blob(blob: str):
         cleaned = strip_ansi(cleaned)
         cleaned = repair_common_trailing_mistakes(cleaned)
         cleaned = balance_single_quotes(cleaned)
-        return "", f"{e}\n-- CLEANED_CANDIDATE:\n{cleaned}"
+        # Strip ANSI codes from error message as well
+        error_msg = strip_ansi(str(e))
+        return "", f"{error_msg}\n-- CLEANED_CANDIDATE:\n{cleaned}"
 
 # ----------------------------------------------------------------------
 # Unified converter (classification: converted / compatible / errors)
