@@ -86,11 +86,8 @@ def force_aliases_pre_parse(sql: str) -> str:
         return f"AS {_clean(alias)}"
 
     def repl_double(m):
-        # For double-quoted aliases (AS "Some Alias"), keep the alias text
-        # exactly the same but switch to backticks so it is a valid identifier
-        # in Databricks SQL: AS `Some Alias`.
         alias = m.group(1)
-        return f"AS `{alias}`"
+        return f'AS "{alias}"'
 
     sql = _AS_SINGLE_QUOTED_ALIAS.sub(repl_single, sql)
     sql = _AS_DOUBLE_QUOTED_ALIAS.sub(repl_double, sql)
@@ -336,11 +333,24 @@ def is_semantically_same(original_sql: str, converted_sql: str) -> bool:
 
 # --- helper: extract inner names of double-quoted and backtick identifiers
 def quoted_identifier_set(sql: str):
+    """
+    Returns a dictionary mapping identifier names to their quote styles.
+    This allows us to detect when quote styles change (e.g., "alias" -> `alias`).
+    
+    Returns:
+        dict: {identifier_name: quote_char} where quote_char is '"' or '`'
+    """
     if not sql:
-        return set()
-    dq = {m.group(1) for m in re.finditer(r'"([^"]+)"', sql)}
-    bt = {m.group(1) for m in re.finditer(r'`([^`]+)`', sql)}
-    return dq.union(bt)
+        return {}
+    
+    result = {}
+    for m in re.finditer(r'"([^"]+)"', sql):
+        result[m.group(1)] = '"'
+    
+    for m in re.finditer(r'`([^`]+)`', sql):
+        result[m.group(1)] = '`'
+    
+    return result
 
 # ----------------------------------------------------------------------
 # EXECUTE ... USING extractor (unwraps embedded SQL)
