@@ -15,6 +15,7 @@ from src.utils.helper_functions import (
     is_semantically_same,
     remove_ansi_and_control_from_file,
 )
+from src.utils.presto_functions import convert_presto_functions
 
 # ----------------------------------------------------------------------
 # EXECUTE ... USING extractor (unwraps embedded SQL)
@@ -63,9 +64,8 @@ def convert_blob(blob: str):
     try:
         blob = strip_ansi(blob)
 
-        # First check for PREPARE statements, then EXECUTE statements
         inner = extract_inner_from_prepare(blob)
-        if inner == blob:  # No PREPARE found, check for EXECUTE
+        if inner == blob:  
             inner = extract_inner_from_execute(blob)
         
         inner = unescape_wrapped_sql_content(inner)
@@ -73,6 +73,7 @@ def convert_blob(blob: str):
         inner = force_aliases_pre_parse(inner)
         inner = ensure_regexp_replacement(inner)
         inner = convert_trim_syntax(inner)
+        inner = convert_presto_functions(inner)
         inner = repair_common_trailing_mistakes(inner)
         inner = balance_single_quotes(inner)
         # Strip any ANSI codes that may have been introduced
