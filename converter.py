@@ -90,7 +90,6 @@ def convert_blob(blob: str):
         cleaned = strip_ansi(cleaned)
         cleaned = repair_common_trailing_mistakes(cleaned)
         cleaned = balance_single_quotes(cleaned)
-        # Strip ANSI codes from error message as well
         error_msg = strip_ansi(str(e))
         return "", f"{error_msg}\n-- CLEANED_CANDIDATE:\n{cleaned}"
 

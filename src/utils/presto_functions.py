@@ -239,6 +239,7 @@ def _convert_date_format_patterns_in_sql(sql: str) -> str:
     - TO_DATE(col, '%Y-%m-%d')
     
     Converts them to Spark 3.0+ compatible patterns.
+    Respects string literal boundaries - patterns inside strings are not converted.
     """
     date_functions = [
         'TO_TIMESTAMP',
@@ -254,6 +255,27 @@ def _convert_date_format_patterns_in_sql(sql: str) -> str:
     n = len(sql)
     
     while i < n:
+        if sql[i] in ('"', "'"):
+            quote_char = sql[i]
+            result.append(quote_char)
+            i += 1
+            
+            while i < n:
+                if sql[i] == quote_char:
+                    if i + 1 < n and sql[i + 1] == quote_char:
+                        result.append(quote_char)
+                        result.append(quote_char)
+                        i += 2
+                    else:
+                        # End of string
+                        result.append(quote_char)
+                        i += 1
+                        break
+                else:
+                    result.append(sql[i])
+                    i += 1
+            continue
+        
         matched_func = None
         for func in date_functions:
             pattern = re.compile(rf'\b{func}\s*\(', re.IGNORECASE)
