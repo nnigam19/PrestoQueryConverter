@@ -14,6 +14,64 @@ _BACKTICK_IDENT = re.compile(r'`([^`]+)`')
 _AS_DOUBLE_QUOTED_ALIAS = re.compile(r'AS\s+"([^"]+)"', flags=re.IGNORECASE)
 _AS_SINGLE_QUOTED_ALIAS = re.compile(r"AS\s+'([^']+)'", flags=re.IGNORECASE)
 
+_KEYWORDS_IN_UNQUOTED_ALIAS = frozenset(
+    {
+        "all",
+        "and",
+        "any",
+        "as",
+        "between",
+        "both",
+        "by",
+        "case",
+        "cross",
+        "distinct",
+        "else",
+        "end",
+        "except",
+        "exists",
+        "false",
+        "from",
+        "full",
+        "group",
+        "having",
+        "ilike",
+        "in",
+        "inner",
+        "intersect",
+        "is",
+        "join",
+        "lateral",
+        "leading",
+        "left",
+        "like",
+        "limit",
+        "natural",
+        "not",
+        "null",
+        "offset",
+        "on",
+        "or",
+        "order",
+        "outer",
+        "recursive",
+        "right",
+        "select",
+        "similar",
+        "some",
+        "then",
+        "to",
+        "trailing",
+        "true",
+        "union",
+        "using",
+        "when",
+        "where",
+        "with",
+    }
+)
+
+
 _REGEXP_REPLACE_2ARGS = re.compile(
     r"(regexp_replace)\(\s*([^\),]+?)\s*,\s*('(?:[^']|''|\\')*')\s*\)",
     flags=re.IGNORECASE,
@@ -92,16 +150,27 @@ def force_aliases_pre_parse(sql: str) -> str:
     sql = _AS_SINGLE_QUOTED_ALIAS.sub(repl_single, sql)
     sql = _AS_DOUBLE_QUOTED_ALIAS.sub(repl_double, sql)
     
-    unquoted_alias_pattern = re.compile(r'\bAS\s+([A-Za-z_][A-Za-z0-9_\s]+?)(?=\s*,\s*[A-Za-z_]|\s+FROM|\s*$)', re.IGNORECASE)
+    _MULTIWORD_UNQUOTED_ALIAS = re.compile(
+        r"\bAS\s+((?:[A-Za-z_][A-Za-z0-9_]*)(?:\s+[A-Za-z_][A-Za-z0-9_]*)+?)"
+        r"(?=\s*,|\s+FROM\b|\s*\)|\s*$)",
+        re.IGNORECASE,
+    )
+
     def repl_unquoted(m):
         alias = m.group(1).strip()
-        if re.search(r'[\s\-]', alias):
+        parts = re.split(r"\s+", alias)
+        if len(parts) < 2:
+            return m.group(0)
+        if any(p.lower() in _KEYWORDS_IN_UNQUOTED_ALIAS for p in parts):
+            return m.group(0)
+        if re.search(r"[\s\-]", alias):
             alias_clean = re.sub(r"\s+", "_", alias)
             alias_clean = re.sub(r"[^\w_]", "_", alias_clean)
             return f"AS {alias_clean}"
         return m.group(0)  
     
-    sql = unquoted_alias_pattern.sub(repl_unquoted, sql)
+    sql = _MULTIWORD_UNQUOTED_ALIAS.sub(repl_unquoted, sql)
+
     
     return sql
 
