@@ -12,7 +12,7 @@ w = WorkspaceClient()
 
 # COMMAND ----------
 
-name = 'databricks-presto-dbsql-converter'
+name = 'db-presto-dbsql-converter'
 description = 'An application for converting legacy SQL to Databricks SQL using LLM.'
 notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().getOrElse(None)
 default_source_code_path = '/Workspace' + notebook_path.rsplit('/', 1)[0] if notebook_path else None
