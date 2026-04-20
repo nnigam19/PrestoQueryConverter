@@ -10,6 +10,8 @@ from converter import (
     is_semantically_same,
     normalize_identifiers,
     quoted_identifier_set,
+    validate_sql,
+    format_validation_issues,
 )
 
 st.set_page_config(page_title="Presto → Databricks SQL Converter", page_icon="🧰", layout="wide")
@@ -23,11 +25,24 @@ tab1, tab2 = st.tabs(["Convert text", "Batch convert file"])
 # Unified converter for Streamlit (classification: converted / compatible / errors)
 # ----------------------------------------------------------------------
 def convert_full(sql_text: str):
+    # --- Pre-conversion validation ---
+    issues = validate_sql(sql_text)
+    blocking = [i for i in issues if i['severity'] == 'ERROR']
+
+    if blocking:
+        formatted = format_validation_issues(issues)
+        return ("", f"-- SQL VALIDATION FAILED\n{formatted}", "")
+
     tokens = safe_split_sql(sql_text)
 
     converted_arr = []
     compatible_arr = []
     errors_arr = []
+
+    non_blocking = [i for i in issues if i['severity'] == 'WARNING']
+    warnings_text = ""
+    if non_blocking:
+        warnings_text = format_validation_issues(non_blocking)
 
     for idx, t in enumerate(tokens, start=1):
         conv, err = convert_blob(t)
@@ -36,7 +51,6 @@ def convert_full(sql_text: str):
             errors_arr.append(f"-- QUERY {idx}\n-- ERROR:\n{err}\n")
             continue
 
-        # Determine classification: Compatible vs Converted
         orig_ast = normalize_identifiers(t).strip().rstrip(";")
         conv_ast = conv.strip().rstrip(";")
 
@@ -45,15 +59,19 @@ def convert_full(sql_text: str):
         conv_q = quoted_identifier_set(conv)
 
         if same_ast and orig_q == conv_q:
-            # Already compatible
             compatible_arr.append(f"-- QUERY {idx}\n{t.strip()};\n")
         else:
-            # Converted
             converted_arr.append(f"-- QUERY {idx}\n{conv.strip()};\n")
+
+    errors_output = "\n".join(errors_arr)
+    if warnings_text and errors_output:
+        errors_output = f"-- WARNINGS\n{warnings_text}\n\n{errors_output}"
+    elif warnings_text:
+        errors_output = f"-- WARNINGS\n{warnings_text}"
 
     return (
         "\n".join(converted_arr),
-        "\n".join(errors_arr),
+        errors_output,
         "\n".join(compatible_arr),
     )
 
@@ -109,6 +127,48 @@ def convert_and_render(sql_text: str):
     if not sql_text or not sql_text.strip():
         st.info("Paste Presto SQL to convert.")
         return
+
+    # --- Pre-conversion validation ---
+    issues = validate_sql(sql_text)
+    errs = [iss for iss in issues if iss['severity'] == 'ERROR']
+    warns = [iss for iss in issues if iss['severity'] == 'WARNING']
+
+    if errs:
+        st.error(
+            f"SQL Validation Failed — {len(errs)} error(s) and "
+            f"{len(warns)} warning(s) found. Please fix before converting."
+        )
+        for iss in errs:
+            st.markdown(
+                f"**Line {iss['line']}, Col {iss['column']}:** "
+                f"{iss['message']}  \n"
+                f"*Fix: {iss['suggestion']}*"
+            )
+        for iss in warns:
+            st.markdown(
+                f"**Line {iss['line']}, Col {iss['column']}:** "
+                f"{iss['message']}  \n"
+                f"*Fix: {iss['suggestion']}*"
+            )
+
+        with st.expander("Your SQL with line numbers"):
+            numbered = "\n".join(
+                f"{i + 1:>4} | {line}"
+                for i, line in enumerate(sql_text.splitlines())
+            )
+            st.code(numbered, language="sql")
+        return
+
+    if warns:
+        st.warning(
+            f"SQL Validation: {len(warns)} warning(s) (non-blocking)"
+        )
+        for iss in warns:
+            st.markdown(
+                f"**Line {iss['line']}, Col {iss['column']}:** "
+                f"{iss['message']}  \n"
+                f"*Fix: {iss['suggestion']}*"
+            )
 
     with st.spinner("Converting…"):
         converted, errors, compatible = convert_full(sql_text)
